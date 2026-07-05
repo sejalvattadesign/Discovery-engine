@@ -1,11 +1,11 @@
 # Deployment Plan — Detour Discovery Engine
 
-Two deployments: **Render** (Python FastAPI RAG backend) + **Vercel** (Next.js dashboard).
+Two deployments: **Hugging Face Spaces** (Python FastAPI RAG backend) + **Vercel** (Next.js dashboard).
 The frontend never talks to the backend from the browser — its own `/api/ask` route proxies
 server-to-server, so there are no CORS issues and the backend URL stays private.
 
 ```
-Browser ── Vercel (Next.js) ──/api/ask──▶ Render (FastAPI + Chroma + Groq)
+Browser ── Vercel (Next.js) ──/api/ask──▶ Hugging Face Space (FastAPI + Chroma + Groq)
                  web/                          api/server.py → app/rag_core.py
 ```
 
@@ -24,36 +24,24 @@ Browser ── Vercel (Next.js) ──/api/ask──▶ Render (FastAPI + Chroma
 
 ---
 
-## 1. Backend → Render (deploy this FIRST — the frontend needs its URL)
+## 1. Backend → Hugging Face Spaces (deploy this FIRST — the frontend needs its URL)
 
-Config is already staged in **`render.yaml`** and **`requirements-api.txt`**.
+The backend is deployed using Docker in the Hugging Face Space repository.
 
-1. Render → **New + → Blueprint** → connect the GitHub repo → it auto-reads `render.yaml`.
-2. When prompted, set the secret env vars (they are `sync: false`, so not in git):
+1. Clone or set up the Hugging Face Space repo (`discovery`).
+2. Copy the backend files (`api/`, `app/`, `data/`, `pipeline/`, etc.) and the `Dockerfile` into the space repository.
+3. Commit and push the changes. Hugging Face will build the Docker container and start the FastAPI service.
+4. Set the secret environment variables in the Hugging Face Space Settings:
    - `GROQ_API_KEY` = your **rotated** key
    - `ANTHROPIC_API_KEY` = (optional fallback)
-3. Deploy. Render will:
-   - `pip install -r requirements-api.txt` (slim serve deps only)
-   - pre-cache the MiniLM embedding model (so the first question is fast)
-   - start `uvicorn api.server:app --host 0.0.0.0 --port $PORT`
-   - health-check `GET /health` → `{"ok": true}`
-4. Copy the service URL, e.g. `https://detour-rag-backend.onrender.com`.
-5. **Smoke test:**
+5. Copy the Space URL, e.g. `https://sejalvatta-discovery.hf.space`.
+6. **Smoke test:**
    ```bash
-   curl https://detour-rag-backend.onrender.com/health
-   curl -X POST https://detour-rag-backend.onrender.com/ask \
+   curl https://sejalvatta-discovery.hf.space/health
+   curl -X POST https://sejalvatta-discovery.hf.space/ask \
      -H "Content-Type: application/json" \
      -d '{"question":"Why do users distrust Discover Weekly?","k":4}'
    ```
-
-**Two caveats on Render free tier:**
-- **Spin-down:** free services sleep after ~15 min idle → first request cold-starts (~30–60s).
-  For a graded link, either upgrade to a paid instance, add a cron ping to keep it warm, or rely on
-  the fact that the **6 preloaded chip answers work even if the backend is asleep** (only free-typed
-  questions hit Render).
-- **Memory (512 MB):** torch + sentence-transformers + Chroma can run tight. If it OOMs, bump to a
-  paid instance, or move the backend to **Hugging Face Spaces** (16 GB free CPU, more ML-friendly) —
-  same `uvicorn` start command.
 
 ---
 
