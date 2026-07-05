@@ -1,0 +1,9 @@
+theme,frequency,freq_share,pain_negative_share,top_segment,segment_concentration,score
+algorithm_distrust,560,0.316,0.88,unknown,0.343,169.0
+discovery_friction,568,0.321,0.646,unknown,0.329,120.7
+sameness_fatigue,383,0.216,0.854,power_user,0.319,104.3
+over_personalization,225,0.127,0.809,unknown,0.444,80.8
+passive_discovery_failure,148,0.084,0.662,unknown,0.372,36.4
+profile_pollution_fear,78,0.044,0.91,unknown,0.474,33.6
+context_mood_mismatch,85,0.048,0.812,genre_enthusiast,0.376,26.0
+intent_expression_gap,199,0.112,0.342,playlist_curator,0.312,21.2

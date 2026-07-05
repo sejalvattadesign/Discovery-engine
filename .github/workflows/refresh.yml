@@ -1,0 +1,111 @@
+name: Weekly pipeline refresh
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"   # every Monday 06:00 UTC
+  workflow_dispatch:        # also allow manual trigger from GitHub UI
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write       # needed to commit updated data.ts
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      # ── Stage 1: scrape (cached to data/raw/) ──────────────────────────────
+      - name: Scrape Play Store
+        run: python scrape/play_store.py
+        env:
+          PYTHONPATH: .
+
+      - name: Scrape App Store
+        run: python scrape/app_store.py
+        env:
+          PYTHONPATH: .
+
+      - name: Scrape Reddit
+        run: python scrape/reddit.py
+        env:
+          PYTHONPATH: .
+          REDDIT_CLIENT_ID:     ${{ secrets.REDDIT_CLIENT_ID }}
+          REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
+          REDDIT_USER_AGENT:    ${{ secrets.REDDIT_USER_AGENT }}
+
+      # ── Stage 2: load + filter + classify ──────────────────────────────────
+      - name: Load to DB
+        run: python pipeline/load_to_db.py
+        env:
+          PYTHONPATH: .
+
+      - name: Filter relevant reviews
+        run: python pipeline/filter_relevant.py
+        env:
+          PYTHONPATH: .
+          GROQ_API_KEY:      ${{ secrets.GROQ_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+      - name: Classify themes / sentiment / segment
+        run: python pipeline/classify.py
+        env:
+          PYTHONPATH: .
+          GROQ_API_KEY:      ${{ secrets.GROQ_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+      - name: Evidence-gated re-segmentation
+        run: python pipeline/resegment.py
+        env:
+          PYTHONPATH: .
+          GROQ_API_KEY:      ${{ secrets.GROQ_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+      - name: Job-to-be-done coding
+        run: python pipeline/classify_jtbd.py
+        env:
+          PYTHONPATH: .
+          GROQ_API_KEY:      ${{ secrets.GROQ_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+      # ── Stage 3: aggregate + export ────────────────────────────────────────
+      - name: Aggregate
+        run: python pipeline/aggregate.py
+        env:
+          PYTHONPATH: .
+
+      - name: Export data.ts for Next.js dashboard
+        run: python pipeline/export_data.py
+        env:
+          PYTHONPATH: .
+
+      - name: Export per-theme drill-down (theme_details.ts)
+        run: python pipeline/theme_details.py
+        env:
+          PYTHONPATH: .
+          GROQ_API_KEY:      ${{ secrets.GROQ_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+
+      # ── Stage 4: rebuild Chroma index ──────────────────────────────────────
+      - name: Rebuild vector index
+        run: python app/build_index.py
+        env:
+          PYTHONPATH: .
+
+      # ── Stage 5: commit any changes ────────────────────────────────────────
+      - name: Commit updated data
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/reviews.db web/lib/data.ts web/lib/theme_details.ts data/agg_theme_ranking.csv data/agg_theme_by_segment.csv
+          git diff --cached --quiet || git commit -m "chore: weekly data refresh $(date -u +%Y-%m-%d)"
+          git push

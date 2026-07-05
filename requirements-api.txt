@@ -1,0 +1,10 @@
+# Slim dependency set for the RAG *serve* layer only (Render backend).
+# The full pipeline (scrapers, pandas, streamlit, matplotlib) is NOT needed to
+# answer questions — keeping this lean makes the Render build faster & lighter.
+fastapi
+uvicorn[standard]
+chromadb
+sentence-transformers
+openai          # Groq is accessed via the OpenAI-compatible client (see pipeline/llm.py)
+anthropic       # fallback provider in llm.py
+python-dotenv

@@ -1,0 +1,15 @@
+google-play-scraper
+app-store-scraper
+praw
+beautifulsoup4
+requests
+pandas
+anthropic
+openai
+chromadb
+sentence-transformers
+streamlit
+matplotlib
+python-dotenv
+fastapi
+uvicorn[standard]

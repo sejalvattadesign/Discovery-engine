@@ -1,0 +1,25 @@
+# Secrets
+.env
+
+# Virtualenv
+.venv/
+
+# Cached raw scraper output
+data/raw/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+
+# Node / Next.js (web dashboard)
+node_modules/
+.next/
+
+# Internal working brief (not needed by graders; describes out-of-scope MVP stages)
+claude.md
+CLAUDE.md
+
+# OS
+.DS_Store

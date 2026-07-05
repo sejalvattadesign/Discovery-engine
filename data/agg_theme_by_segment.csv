@@ -1,0 +1,9 @@
+theme,casual_listener,genre_enthusiast,new_user,passive_listener,playlist_curator,power_user,unknown
+discovery_friction,20,105,42,5,109,100,187
+algorithm_distrust,16,115,27,3,59,148,192
+sameness_fatigue,26,73,17,11,38,122,96
+over_personalization,7,26,5,0,47,40,100
+intent_expression_gap,9,48,6,0,62,16,58
+passive_discovery_failure,6,15,7,1,21,43,55
+context_mood_mismatch,1,32,3,4,11,8,26
+profile_pollution_fear,0,14,4,0,9,14,37
