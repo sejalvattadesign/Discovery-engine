@@ -4,6 +4,8 @@ import { NextRequest, NextResponse } from "next/server";
 // Set BACKEND_URL in the environment for deployment; defaults to local dev.
 const BACKEND_URL = process.env.BACKEND_URL || "http://localhost:8000";
 
+export const maxDuration = 60;
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
