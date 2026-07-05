@@ -6,10 +6,14 @@ guardrails can never drift between them. Pure Python (no Streamlit), module-leve
 
 from __future__ import annotations
 
+import logging
 import re
 import sys
+import time
 from functools import lru_cache
 from pathlib import Path
+
+logger = logging.getLogger("detour.rag")
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "pipeline"))
@@ -34,6 +38,13 @@ REFUSAL = (
     "reviews to answer that. Try one of the suggested questions, or rephrase around the "
     "discovery experience."
 )
+
+def _preview(text: str, n: int = 80) -> str:
+    collapsed = " ".join((text or "").split())
+    if len(collapsed) <= n:
+        return collapsed
+    return collapsed[: n - 1] + "…"
+
 
 ANSWER_PROMPT = """\
 You are a product research analyst studying Spotify music-DISCOVERY feedback. You answer \
@@ -113,6 +124,7 @@ def pool_index(pool: list, source: str) -> float:
 
 def retrieve(question: str, k: int = 5, where: dict | None = None):
     """Return (hits, best_distance). hits = list of (doc, metadata), source-balanced."""
+    t0 = time.perf_counter()
     pool_n = max(k * 8, 40)
     res = get_collection().query(
         query_texts=[question], n_results=pool_n, where=where or None,
@@ -122,7 +134,30 @@ def retrieve(question: str, k: int = 5, where: dict | None = None):
     dists = res.get("distances", [[None]] * len(docs))[0]
     pool = list(zip(docs, metas, dists))  # already distance-sorted by Chroma
     best = min((d for d in dists if d is not None), default=None)
-    return _balance_by_source(pool, k), best
+    hits = _balance_by_source(pool, k)
+    sources = sorted({m.get("source", "?") for _, m in hits})
+    top3 = [round(d, 4) for d in dists[:3] if d is not None]
+    elapsed_ms = (time.perf_counter() - t0) * 1000
+    logger.info(
+        "retrieve pool=%d hits=%d best_dist=%s top3=%s sources=%s where=%s elapsed_ms=%.0f",
+        pool_n,
+        len(hits),
+        f"{best:.4f}" if best is not None else "none",
+        top3,
+        sources,
+        where or None,
+        elapsed_ms,
+    )
+    for i, (doc, m) in enumerate(hits):
+        logger.debug(
+            "retrieve hit[%d] source=%s segment=%s date=%s len=%d",
+            i + 1,
+            m.get("source", "?"),
+            m.get("segment", "?"),
+            m.get("date", "?"),
+            len(doc or ""),
+        )
+    return hits, best
 
 
 def answer_question(question: str, hits: list) -> str:
@@ -130,11 +165,21 @@ def answer_question(question: str, hits: list) -> str:
         f'[{i+1}] ({m.get("source")}, {m.get("date")}, {m.get("segment")}) "{doc[:400]}"'
         for i, (doc, m) in enumerate(hits)
     )
+    t0 = time.perf_counter()
     out = complete(
         ANSWER_PROMPT.format(question=question, context=context),
         max_tokens=900, model=ANSWER_MODEL, reasoning_effort="low",
     )
+    elapsed_ms = (time.perf_counter() - t0) * 1000
+    logger.info(
+        "llm model=%s hits=%d elapsed_ms=%.0f out_len=%d",
+        ANSWER_MODEL,
+        len(hits),
+        elapsed_ms,
+        len(out or ""),
+    )
     if "OUT_OF_SCOPE" in (out or ""):
+        logger.info("llm refused out_of_scope q=%r", _preview(question))
         return REFUSAL
     return out or REFUSAL
 
@@ -152,8 +197,10 @@ def split_takeaway(ans: str) -> tuple[str, str]:
 def ask(question: str, k: int = 5, source: str | None = None,
         segment: str | None = None) -> dict:
     """High-level entry point with full guardrails. Returns a structured result."""
+    t0 = time.perf_counter()
     question = (question or "").strip()
     if not question:
+        logger.info("ask refused reason=empty_question")
         return {"refused": True, "answer": REFUSAL, "takeaway": "", "sources": []}
 
     where: dict = {}
@@ -162,18 +209,45 @@ def ask(question: str, k: int = 5, source: str | None = None,
     if segment and segment != "All":
         where["segment"] = segment
 
+    logger.info(
+        "ask start q=%r k=%d source=%s segment=%s",
+        _preview(question),
+        k,
+        source or "All",
+        segment or "All",
+    )
+
     hits, best = retrieve(question, k, where or None)
+    retrieve_ms = (time.perf_counter() - t0) * 1000
 
     # Tier 1 — retrieval gate
     if not hits or best is None or best > SCOPE_THRESHOLD:
+        logger.info(
+            "ask refused tier=retrieval hits=%d best_dist=%s threshold=%.2f retrieve_ms=%.0f elapsed_ms=%.0f",
+            len(hits),
+            f"{best:.4f}" if best is not None else "none",
+            SCOPE_THRESHOLD,
+            retrieve_ms,
+            retrieve_ms,
+        )
         return {"refused": True, "answer": REFUSAL, "takeaway": "", "sources": []}
 
     # Tier 2 — grounded, guarded answer
+    llm_start = time.perf_counter()
     try:
         ans = answer_question(question, hits)
     except Exception as exc:  # noqa: BLE001 — surface a clean message, never a 500
         msg = str(exc)
         busy = "rate limit" in msg.lower() or "429" in msg
+        llm_ms = (time.perf_counter() - llm_start) * 1000
+        logger.exception(
+            "ask failed tier=llm busy=%s retrieve_ms=%.0f llm_ms=%.0f elapsed_ms=%.0f q=%r",
+            busy,
+            retrieve_ms,
+            llm_ms,
+            (time.perf_counter() - t0) * 1000,
+            _preview(question),
+        )
         return {
             "refused": False,
             "error": "busy" if busy else "error",
@@ -200,5 +274,29 @@ def ask(question: str, k: int = 5, source: str | None = None,
                 "date": str(m.get("date", "")),
                 "rating": m.get("rating"),
             })
+
+    elapsed_ms = (time.perf_counter() - t0) * 1000
+    llm_ms = (time.perf_counter() - llm_start) * 1000
+    if refused:
+        logger.info(
+            "ask refused tier=llm hits=%d retrieve_ms=%.0f llm_ms=%.0f elapsed_ms=%.0f q=%r",
+            len(hits),
+            retrieve_ms,
+            llm_ms,
+            elapsed_ms,
+            _preview(question),
+        )
+    else:
+        cite_sources = sorted({s["source"] for s in sources if s["source"]})
+        logger.info(
+            "ask ok hits=%d cites=%d sources=%s takeaway=%s retrieve_ms=%.0f llm_ms=%.0f elapsed_ms=%.0f",
+            len(hits),
+            len(sources),
+            cite_sources,
+            bool(takeaway),
+            retrieve_ms,
+            llm_ms,
+            elapsed_ms,
+        )
 
     return {"refused": refused, "answer": body, "takeaway": takeaway, "sources": sources}
