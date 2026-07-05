@@ -90,6 +90,11 @@ class AskRequest(BaseModel):
     segment: Optional[str] = None
 
 
+@app.get("/")
+def root() -> dict:
+    return {"status": "Discovery Lens RAG backend is running", "docs": "/docs", "health": "/health"}
+
+
 @app.get("/health")
 def health() -> dict:
     return {"ok": True}
